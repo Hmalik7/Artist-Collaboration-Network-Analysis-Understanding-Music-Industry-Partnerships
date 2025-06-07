@@ -1,11 +1,5 @@
 # Artist Collaboration Network Analysis: Understanding Music Industry Partnerships
 
-**Author**: Harsh Malik
-**Date**: `r Sys.Date()`
-**Output Format**: HTML with floating TOC, numbered sections
-
----
-
 ## Project Overview
 
 This project explores collaboration patterns among music artists by constructing and analyzing a **network graph** using Spotify Charts data. Each artist is represented as a node, and edges connect artists who have worked together on a track. This method transforms collaboration data into a social network, revealing insights about influence, popularity, and group dynamics in the music industry.
