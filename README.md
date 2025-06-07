@@ -142,7 +142,3 @@ This project can support:
 1. Place `Charts.csv` in your working directory.
 2. Open the R Markdown file and knit to HTML.
 3. Install all required R packages listed above using `install.packages()`.
-
----
-
-Let me know if you’d like this version exported to PDF, embedded into a GitHub site, or adjusted for class submission.
