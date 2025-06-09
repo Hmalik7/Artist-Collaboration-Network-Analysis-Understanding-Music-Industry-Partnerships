@@ -1,0 +1,316 @@
+---
+title: "Artist Collaboration Network Analysis: Understanding Music Industry Partnerships"
+author: "Harsh Malik"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(igraph)
+library(knitr)
+library(kableExtra)
+library(purrr)
+library(ggplot2)
+library(ggraph)
+library(RColorBrewer)
+library(corrplot)
+```
+
+# Project Summary
+
+This project analyzes collaboration patterns among music artists using network analysis techniques applied to Spotify Charts data. The approach treats the music industry as a network where artists are connected through their collaborative work on songs. The primary objective is to identify influential artists within this collaboration network and understand the community structures that emerge from these partnerships.
+
+The analysis examines different types of influence and importance within the network through various centrality measures including degree, betweenness, and eigenvector centrality. Some artists may be important because they collaborate with many different musicians, while others serve as crucial bridges connecting different groups of artists who might not otherwise work together. The study also investigates whether natural communities or clusters of artists exist who tend to collaborate frequently with each other.
+
+The findings reveal clear patterns in the music industry's collaboration network. There are distinct groups of artists who collaborate frequently within their communities, as well as bridge artists who connect these different musical groups. Through network visualization and community detection algorithms, we can measure and visualize these collaboration patterns, providing insights into how the modern music industry operates and how creative partnerships develop over time.
+
+
+# Data Setup and Description
+
+```{r load-data}
+# Load required packages and dataset
+charts <- read.csv("Charts.csv")
+
+# Clean and parse artist data
+charts_clean <- charts %>%
+  filter(!is.na(artists), !is.na(track_id)) %>%
+  mutate(artist_list = strsplit(as.character(artists), ";"))
+
+# Display basic data information
+cat("Dataset Overview:\n")
+cat("Total tracks:", nrow(charts), "\n")
+cat("Tracks with artist information:", nrow(charts_clean), "\n")
+head(charts_clean[c("track_name", "artists")], 5) %>%
+  kable(caption = "Sample of Track Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Data Description
+
+The dataset consists of Spotify Charts data containing information about popular tracks and their associated artists. In this network analysis:
+
+- **Vertices (Nodes)**: Individual music artists
+- **Edges (Connections)**: Collaboration relationships between artists who appear together on the same track
+- **Edge Weights**: Number of times two artists have collaborated (co-appeared on tracks)
+
+**Data Source**: Spotify Charts Dataset  
+**Collection Period**: The data represents chart performance across multiple time periods  
+**Network Construction**: Collaboration edges are inferred from artist co-appearance on tracks, where artists listed together on a single track are considered to have a collaboration relationship.
+
+```{r build-network}
+# Create edge list from artist collaborations
+get_edges <- function(artists) {
+  if (length(artists) > 1) {
+    combn(sort(unique(trimws(artists))), 2, simplify = FALSE)
+  } else {
+    NULL
+  }
+}
+
+edges <- charts_clean$artist_list %>%
+  map(get_edges) %>%
+  compact() %>%
+  flatten() %>%
+  map_df(~ tibble(from = .x[1], to = .x[2])) %>%
+  group_by(from, to) %>%
+  summarise(weight = n(), .groups = 'drop')
+
+# Build undirected graph
+g <- graph_from_data_frame(edges, directed = FALSE)
+
+# Network summary statistics
+num_nodes <- vcount(g)
+num_edges <- ecount(g)
+avg_degree <- mean(degree(g))
+density <- graph.density(g)
+
+cat("Network Overview:\n")
+cat("Number of Artists (Nodes):", num_nodes, "\n")
+cat("Number of Collaborations (Edges):", num_edges, "\n")
+cat("Average Degree:", round(avg_degree, 2), "\n")
+cat("Network Density:", round(density, 4), "\n")
+```
+
+# Network Visualizations
+
+## Overall Network Structure
+
+```{r network-viz, fig.width=12, fig.height=10}
+# For visualization efficiency, use top connected artists
+deg_cent <- degree(g, mode = "all")
+top_artists <- names(sort(deg_cent, decreasing = TRUE)[1:50])
+g_sub <- induced_subgraph(g, top_artists)
+
+# Detect communities for visualization
+communities <- cluster_louvain(g)
+V(g_sub)$community <- membership(communities)[V(g_sub)$name]
+V(g_sub)$degree <- degree(g_sub)
+
+# Create layout
+set.seed(42)
+layout <- layout_with_fr(g_sub)
+
+# Plot with ggraph
+ggraph(g_sub, layout = layout) +
+  geom_edge_link(aes(width = weight), alpha = 0.3, color = "gray70") +
+  geom_node_point(aes(size = degree, color = factor(community)), alpha = 0.8) +
+  geom_node_text(aes(label = name), size = 2.5, repel = TRUE, max.overlaps = 20) +
+  scale_edge_width_continuous(range = c(0.1, 2), guide = "none") +
+  scale_size_continuous(range = c(2, 8), name = "Degree") +
+  scale_color_brewer(type = "qual", palette = "Set3", name = "Community") +
+  labs(title = "Artist Collaboration Network (Top 50 Connected Artists)",
+       subtitle = "Node size represents collaboration frequency, Colors indicate community membership") +
+  theme_graph() +
+  theme(legend.position = "right")
+```
+
+This network visualization shows the most connected 50 artists in our dataset. The size of each dot represents how many collaborations that artist has, while the colors show different communities of artists who tend to work together frequently. You can see some clear clusters forming, suggesting that certain groups of artists collaborate more within their community than with others.
+
+## Degree Distribution Analysis
+
+```{r degree-distribution, fig.width=12, fig.height=6}
+degree_data <- tibble(degree = deg_cent) %>%
+  count(degree) %>%
+  mutate(log_degree = log10(degree + 1), log_count = log10(n))
+
+p1 <- ggplot(degree_data, aes(x = degree, y = n)) +
+  geom_point(alpha = 0.7, color = "steelblue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Degree Distribution", 
+       x = "Number of Collaborations", 
+       y = "Number of Artists") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+p2 <- ggplot(degree_data, aes(x = log_degree, y = log_count)) +
+  geom_point(alpha = 0.7, color = "darkgreen", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed") +
+  labs(title = "Log-Log Degree Distribution", 
+       x = "Log(Number of Collaborations)", 
+       y = "Log(Number of Artists)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+# Arrange plots side by side
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2)
+```
+
+The degree distribution tells us about the inequality in collaboration patterns. The left plot shows that most artists have few collaborations, while a small number have many. The right plot (log-log scale) helps us see if this follows a "power law" pattern, which is common in social networks and suggests a "rich get richer" phenomenon where well-connected artists attract more collaborations.
+
+# Network Analysis
+
+## Centrality Measures
+
+### Degree Centrality
+```{r degree-centrality}
+top_deg <- sort(deg_cent, decreasing = TRUE)[1:10]
+top_deg_df <- tibble(Artist = names(top_deg), Degree_Centrality = as.integer(top_deg))
+
+kable(top_deg_df, caption = "Top 10 Artists by Degree Centrality (Most Collaborative)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+Degree centrality identifies the most collaborative artists - those who work with the highest number of different partners. These artists are often prolific collaborators who contribute to the connectivity of the music industry network.
+
+### Betweenness Centrality
+```{r betweenness-centrality}
+# For large networks, sample for efficiency
+if (num_nodes > 1000) {
+  sample_nodes <- sample(V(g), min(500, num_nodes))
+  bet_cent <- betweenness(g, v = sample_nodes, normalized = TRUE)
+  cat("Note: Betweenness calculated on sample of", length(sample_nodes), "nodes for computational efficiency\n")
+} else {
+  bet_cent <- betweenness(g, normalized = TRUE)
+}
+
+top_bet <- sort(bet_cent, decreasing = TRUE)[1:10]
+top_bet_df <- tibble(Artist = names(top_bet), Betweenness_Centrality = round(top_bet, 4))
+
+kable(top_bet_df, caption = "Top 10 Artists by Betweenness Centrality (Bridge Artists)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+Betweenness centrality identifies "bridge" artists who connect different parts of the network. These artists may not have the most collaborations, but they play crucial roles in linking different musical communities or genres together.
+
+### Eigenvector Centrality
+```{r eigenvector-centrality}
+eigen_cent <- eigen_centrality(g)$vector
+top_eigen <- sort(eigen_cent, decreasing = TRUE)[1:10]
+top_eigen_df <- tibble(Artist = names(top_eigen), Eigenvector_Centrality = round(top_eigen, 4))
+
+kable(top_eigen_df, caption = "Top 10 Artists by Eigenvector Centrality (Most Influential)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+Eigenvector centrality measures influence based on the importance of an artist's collaborators. Artists with high eigenvector centrality collaborate with other highly connected artists, suggesting they are influential within elite musical circles.
+
+## Community Detection Analysis
+
+```{r community-detection}
+num_communities <- length(communities)
+
+cat("Community Detection Results:\n")
+cat("Number of Communities Found:", num_communities, "\n")
+cat("Modularity Score:", round(modularity(communities), 3), "\n")
+
+# Get community sizes
+comm_sizes <- sizes(communities)
+comm_summary <- tibble(
+  Community = 1:length(comm_sizes),
+  Size = as.integer(comm_sizes)
+) %>%
+  arrange(desc(Size))
+
+kable(head(comm_summary, 10), caption = "Top 10 Largest Communities") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+Community detection reveals natural groupings of artists who collaborate frequently with each other. The modularity score indicates how well-defined these communities are, with higher scores suggesting clearer community structure.
+
+```{r community-analysis}
+# Analyze top communities
+top_communities <- head(comm_summary$Community, 5)
+
+cat("Top Community Members:\n")
+for (i in top_communities) {
+  comm_members <- names(membership(communities)[membership(communities) == i])
+  cat("\nCommunity", i, "(", comm_sizes[i], "artists ):\n")
+  cat("Sample Members:", paste(head(comm_members, 8), collapse = ", "))
+  if (length(comm_members) > 8) {
+    cat(", ... and", length(comm_members) - 8, "more artists")
+  }
+  cat("\n")
+}
+```
+
+## Centrality Relationships
+
+```{r centrality-comparison, fig.width=10, fig.height=8}
+# Combine all centrality measures for comparison
+centrality_df <- tibble(
+  Artist = V(g)$name,
+  Degree = deg_cent,
+  Betweenness = betweenness(g, normalized = TRUE),
+  Eigenvector = eigen_cent
+)
+
+# Correlation analysis
+corr_matrix <- cor(centrality_df[, c("Degree", "Betweenness", "Eigenvector")], use = "complete.obs")
+
+corrplot(corr_matrix, method = "circle", type = "upper", 
+         title = "Centrality Measures Correlation", 
+         mar = c(0,0,2,0),
+         tl.cex = 1.2, title.cex = 1.4)
+```
+
+This correlation matrix shows how the different centrality measures relate to each other. Strong positive correlations indicate that artists who score high on one measure tend to score high on others, while weaker correlations suggest different types of network importance.
+
+# Key Findings and Implications
+
+```{r findings}
+# Summary statistics
+most_central_degree <- names(which.max(deg_cent))
+most_central_between <- names(which.max(bet_cent))
+most_central_eigen <- names(which.max(eigen_cent))
+
+cat("Network Analysis Summary:\n")
+cat("Most Collaborative Artist (Degree):", most_central_degree, 
+    "with", max(deg_cent), "collaborations\n")
+cat("Top Bridge Artist (Betweenness):", most_central_between, 
+    "with normalized score", round(max(bet_cent), 4), "\n")
+cat("Most Influential Artist (Eigenvector):", most_central_eigen, 
+    "with score", round(max(eigen_cent), 4), "\n")
+cat("Total Communities Detected:", num_communities, "\n")
+cat("Largest Community Size:", max(comm_sizes), "artists\n")
+
+# Network density interpretation
+if (density < 0.01) {
+  cat("Network Characteristic: Sparse network (density =", round(density, 4), ")")
+  cat(" - Most artists collaborate with a small fraction of all possible partners\n")
+} else {
+  cat("Network Characteristic: Dense network (density =", round(density, 4), ")")
+  cat(" - Artists tend to collaborate broadly across the network\n")
+}
+```
+
+## Summary and Conclusions
+
+
+
+This project looks at how music artists work together and what that tells us about the music world. We studied a big network of artists who have made songs together and it shows us some interesting patterns.
+
+We found that artists often stay in certain groups. These groups are like friend circles where they work with the same people a lot. Some artists work with many others and are very friendly. Some artists connect different groups together like bridges between circles. Some artists are important because they know other well connected people.
+
+Even though it seems like all artists are connected they actually form smaller teams. These teams might be based on the kind of music they make or where they live or who they know in the music business.
+
+This helps us understand how music styles spread. It also shows how new artists can become popular. It helps explain how working together helps people make fun songs that many people like.
+
+
